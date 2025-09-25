@@ -3,8 +3,13 @@ import { reloadApp } from 'react-native-ota';
 import { useState } from 'react';
 export default function App() {
   const [hello] = useState(0);
-  const handleReset = () => {
-    reloadApp();
+  const handleReset = async () => {
+    try {
+      const result = await reloadApp();
+      console.log(result); // "Reload triggered"
+    } catch (e) {
+      console.error(e);
+    }
   };
   return (
     <View style={styles.container}>
