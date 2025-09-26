@@ -2,7 +2,7 @@ import UIKit
 import React
 import React_RCTAppDelegate
 import ReactAppDependencyProvider
-
+import Ota
 @main
 class AppDelegate: UIResponder, UIApplicationDelegate {
   var window: UIWindow?
@@ -42,7 +42,7 @@ class ReactNativeDelegate: RCTDefaultReactNativeFactoryDelegate {
 #if DEBUG
     RCTBundleURLProvider.sharedSettings().jsBundleURL(forBundleRoot: "index")
 #else
-    Bundle.main.url(forResource: "main", withExtension: "jsbundle")
+    return OtaHelper.bundleURL()
 #endif
   }
 }
