@@ -2369,34 +2369,6 @@ PODS:
     - React-perflogger (= 0.81.1)
     - React-utils (= 0.81.1)
     - SocketRocket
-  - ReloadApp (1.0.1):
-    - boost
-    - DoubleConversion
-    - fast_float
-    - fmt
-    - glog
-    - hermes-engine
-    - RCT-Folly
-    - RCT-Folly/Fabric
-    - RCTRequired
-    - RCTTypeSafety
-    - React-Core
-    - React-debug
-    - React-Fabric
-    - React-featureflags
-    - React-graphics
-    - React-ImageManager
-    - React-jsi
-    - React-NativeModulesApple
-    - React-RCTFabric
-    - React-renderercss
-    - React-rendererdebug
-    - React-utils
-    - ReactCodegen
-    - ReactCommon/turbomodule/bridging
-    - ReactCommon/turbomodule/core
-    - SocketRocket
-    - Yoga
   - SocketRocket (0.7.1)
   - SSZipArchive (2.4.3)
   - Yoga (0.0.0)
@@ -2475,7 +2447,6 @@ DEPENDENCIES:
   - ReactAppDependencyProvider (from `build/generated/ios`)
   - ReactCodegen (from `build/generated/ios`)
   - ReactCommon/turbomodule/core (from `../node_modules/react-native/ReactCommon`)
-  - ReloadApp (from `../node_modules/react-native-reload-app`)
   - SocketRocket (~> 0.7.1)
   - Yoga (from `../node_modules/react-native/ReactCommon/yoga`)
 
@@ -2630,8 +2601,6 @@ EXTERNAL SOURCES:
     :path: build/generated/ios
   ReactCommon:
     :path: "../node_modules/react-native/ReactCommon"
-  ReloadApp:
-    :path: "../node_modules/react-native-reload-app"
   Yoga:
     :path: "../node_modules/react-native/ReactCommon/yoga"
 
@@ -2708,7 +2677,6 @@ SPEC CHECKSUMS:
   ReactAppDependencyProvider: 3eb9096cb139eb433965693bbe541d96eb3d3ec9
   ReactCodegen: 4d203eddf6f977caa324640a20f92e70408d648b
   ReactCommon: ce5d4226dfaf9d5dacbef57b4528819e39d3a120
-  ReloadApp: 127b1f87dda7b8f0f65c810d85020dcf8c33f909
   SocketRocket: d4aabe649be1e368d1318fdf28a022d714d65748
   SSZipArchive: fe6a26b2a54d5a0890f2567b5cc6de5caa600aef
   Yoga: 11c9686a21e2cd82a094a723649d9f4507200fb0

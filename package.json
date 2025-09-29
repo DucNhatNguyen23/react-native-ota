@@ -1,5 +1,5 @@
 {
-  "name": "react-native-ota",
+  "name": "react-native-bundle-ota",
   "version": "0.1.0",
   "description": "here is a simple libary for ota react native update",
   "main": "./lib/module/index.js",
@@ -43,7 +43,13 @@
   "keywords": [
     "react-native",
     "ios",
-    "android"
+    "android",
+    "ota",
+    "update",
+    "bundle",
+    "hot-reload",
+    "over-the-air",
+    "turbomodule"
   ],
   "repository": {
     "type": "git",

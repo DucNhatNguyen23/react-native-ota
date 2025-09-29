@@ -3,20 +3,20 @@ import { Button, Platform, StyleSheet, Text, View } from 'react-native';
 import {
   downloadBundle,
   getSavedVersion,
+  reloadApp,
   removeBundle,
 } from 'react-native-ota';
-import { reloadApp } from 'react-native-reload-app';
 type responseVersionCode = {
   versionCode: number;
 };
+const URL = 'http://10.0.2.2:3000';
 export default function App() {
-  const [stt] = useState<boolean>(false);
-  const [err, setErr] = useState<string>('');
+  const [status] = useState<string>('');
 
   const handleReset = async () => {
     try {
       const result = await reloadApp();
-      console.log(result); // "Reload triggered"
+      console.log(result);
     } catch (e) {
       console.error(e);
     }
@@ -24,31 +24,35 @@ export default function App() {
 
   const handleDownload = async () => {
     try {
-      const response = await fetch('http://192.168.8.61:3000/ota/version');
-      const getVersion: responseVersionCode = await response.json();
-      console.log('versionCode', getVersion.versionCode);
+      // get version code from server
+      // type server response is { versionCode: number }
 
+      const response = await fetch(`${URL}/ota/version`);
+      const getVersion: responseVersionCode = await response.json();
+
+      //get saved version code in app
       const savedVersion = getSavedVersion();
-      console.log('savedVersion', savedVersion);
 
       if (savedVersion === getVersion.versionCode) {
-        setErr('Khong co gi de update ca');
+        // Already the latest version
         return;
       }
-      if (Platform.OS === 'ios') {
-        const result = await downloadBundle(
-          'http://192.168.8.61:3000/ota/ios-bundle',
-          getVersion.versionCode
-        );
-        console.log('ios', result);
-        setErr(result.message);
-      }
-      // console.log(result);
 
-      // setStt(result);
+      // url response bundle from server (main.jsbundle.zip for ios, index.android.bundle.zip for android)
+      const url = Platform.select({
+        android: `${URL}/ota/android-bundle`,
+        ios: `${URL}/ota/ios-bundle`,
+      });
+
+      // download bundle
+      const result = await downloadBundle(url, getVersion.versionCode);
+
+      //if download success, reload app and apply new bundle
+      if (result.status) {
+        reloadApp();
+      }
     } catch (e) {
-      console.error('loi dao', e);
-      setErr(JSON.stringify(e));
+      console.error(e);
     }
   };
   useEffect(() => {
@@ -56,10 +60,11 @@ export default function App() {
   }, []);
   return (
     <View style={styles.container}>
-      <Text>chua update dau nha {stt ? 'oke' : 'khong ok'}</Text>
-      <Text>Errr: {err}</Text>
-      <Button title="Press me" onPress={handleReset} />
-      <Button title="Press me" onPress={removeBundle} />
+      <Text>Hello we have a update version!!!!!</Text>
+      <Text>status: {status}</Text>
+      <Text>version saved code: {getSavedVersion()}</Text>
+      <Button title="Reload" onPress={handleReset} />
+      <Button title="Remove bundle" onPress={removeBundle} />
     </View>
   );
 }
