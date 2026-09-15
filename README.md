@@ -14,9 +14,9 @@ A lightweight React Native TurboModule library for Over-The-Air (OTA) updates, a
 Install the library using your preferred package manager:
 
 ```bash
-yarn add react-native-ota
+yarn add react-native-bundle-ota
 # or
-npm install react-native-ota
+npm install react-native-bundle-ota
 ```
 IOS
 ```
@@ -92,7 +92,7 @@ import {
   getSavedVersion,
   reloadApp,
   // removeBundle,
-} from 'react-native-ota';
+} from 'react-native-bundle-ota';
 import { Platform } from 'react-native';
 
 const URL = 'https://your-url';

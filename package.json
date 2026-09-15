@@ -1,6 +1,6 @@
 {
   "name": "react-native-bundle-ota",
-  "version": "0.1.0",
+  "version": "1.0.1",
   "description": "here is a simple libary for ota react native update",
   "main": "./lib/module/index.js",
   "types": "./lib/typescript/src/index.d.ts",
