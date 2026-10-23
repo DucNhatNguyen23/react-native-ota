@@ -1,33 +1,153 @@
 #import "Ota.h"
-#import <React/RCTBridge.h>
-#import <React/RCTRootView.h>
+#import <CommonCrypto/CommonDigest.h>
 #import <React/RCTReloadCommand.h>
-#import <UIKit/UIKit.h>
 #import <SSZipArchive/SSZipArchive.h>
-#import <React/RCTBundleURLProvider.h>
 
+#if __has_include(<Ota/Ota-Swift.h>)
+#import <Ota/Ota-Swift.h>
+#else
+#import "Ota-Swift.h"
+#endif
 
+static NSString *const kBundleName = @"main.jsbundle";
 
-@implementation Ota
+static NSString *_Nullable OtaSha256(NSURL *fileURL)
+{
+  NSInputStream *stream = [NSInputStream inputStreamWithURL:fileURL];
+  [stream open];
+  CC_SHA256_CTX ctx;
+  CC_SHA256_Init(&ctx);
+  uint8_t buffer[32 * 1024];
+  NSInteger read;
+  while ((read = [stream read:buffer maxLength:sizeof(buffer)]) > 0) {
+    CC_SHA256_Update(&ctx, buffer, (CC_LONG)read);
+  }
+  [stream close];
+  if (read < 0) return nil;
 
+  unsigned char digest[CC_SHA256_DIGEST_LENGTH];
+  CC_SHA256_Final(digest, &ctx);
+  NSMutableString *hex = [NSMutableString stringWithCapacity:CC_SHA256_DIGEST_LENGTH * 2];
+  for (int i = 0; i < CC_SHA256_DIGEST_LENGTH; i++) {
+    [hex appendFormat:@"%02x", digest[i]];
+  }
+  return hex;
+}
+
+typedef void (^OtaProgressBlock)(int64_t received, int64_t total);
+typedef void (^OtaDownloadCompletion)(NSURL *_Nullable location, NSURLResponse *_Nullable response, NSError *_Nullable error);
+
+// The completion-handler variant of NSURLSession does not report progress, so use a delegate
+@interface OtaDownloadDelegate : NSObject <NSURLSessionDownloadDelegate>
+@property (nonatomic, copy) OtaProgressBlock onProgress;
+@property (nonatomic, copy) OtaDownloadCompletion onComplete;
+@end
+
+@implementation OtaDownloadDelegate {
+  BOOL _finished;
+}
+
+- (void)URLSession:(NSURLSession *)session
+      downloadTask:(NSURLSessionDownloadTask *)downloadTask
+      didWriteData:(int64_t)bytesWritten
+ totalBytesWritten:(int64_t)totalBytesWritten
+totalBytesExpectedToWrite:(int64_t)totalBytesExpectedToWrite
+{
+  self.onProgress(totalBytesWritten, totalBytesExpectedToWrite);
+}
+
+- (void)URLSession:(NSURLSession *)session
+      downloadTask:(NSURLSessionDownloadTask *)downloadTask
+didFinishDownloadingToURL:(NSURL *)location
+{
+  // `location` is deleted as soon as this method returns
+  _finished = YES;
+  self.onComplete(location, downloadTask.response, nil);
+}
+
+- (void)URLSession:(NSURLSession *)session
+              task:(NSURLSessionTask *)task
+didCompleteWithError:(NSError *)error
+{
+  if (!_finished) {
+    _finished = YES;
+    self.onComplete(nil, task.response, error);
+  }
+}
+
+@end
+
+// Emits only when the integer percent changes (at most ~100 events per phase),
+// or every 100ms when the total size is unknown
+@interface OtaProgressThrottle : NSObject
+- (instancetype)initWithPhase:(NSString *)phase emitter:(void (^)(NSDictionary *))emitter;
+- (void)update:(int64_t)received total:(int64_t)total;
+- (void)finish:(int64_t)received total:(int64_t)total;
+@end
+
+@implementation OtaProgressThrottle {
+  NSString *_phase;
+  void (^_emitter)(NSDictionary *);
+  int _lastPercent;
+  CFAbsoluteTime _lastEmitAt;
+}
+
+- (instancetype)initWithPhase:(NSString *)phase emitter:(void (^)(NSDictionary *))emitter
+{
+  if (self = [super init]) {
+    _phase = phase;
+    _emitter = [emitter copy];
+    _lastPercent = -1;
+  }
+  return self;
+}
+
+- (void)update:(int64_t)received total:(int64_t)total
+{
+  if (total > 0) {
+    int percent = (int)(received * 100 / total);
+    if (percent == _lastPercent) return;
+    _lastPercent = percent;
+    [self emit:received total:total percent:percent];
+  } else {
+    CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+    if (now - _lastEmitAt < 0.1) return;
+    _lastEmitAt = now;
+    [self emit:received total:total percent:-1];
+  }
+}
+
+- (void)finish:(int64_t)received total:(int64_t)total
+{
+  if (_lastPercent != 100) [self emit:received total:total percent:100];
+}
+
+- (void)emit:(int64_t)received total:(int64_t)total percent:(int)percent
+{
+  _emitter(@{@"phase": _phase, @"progress": @(percent), @"received": @(received), @"total": @(total)});
+}
+
+@end
+
+@implementation Ota {
+  // Downloads share the staging folder, so only one may run at a time
+  BOOL _downloading;
+}
 
 RCT_EXPORT_MODULE()
+
+- (std::shared_ptr<facebook::react::TurboModule>)getTurboModule:
+(const facebook::react::ObjCTurboModule::InitParams &)params
+{
+  return std::make_shared<facebook::react::NativeOtaSpecJSI>(params);
+}
 
 - (void)reloadApp:(RCTPromiseResolveBlock)resolve
            reject:(RCTPromiseRejectBlock)reject
 {
   dispatch_async(dispatch_get_main_queue(), ^{
     @try {
-      
-      // Log bundle hiện tại
-      NSFileManager *fileManager = [NSFileManager defaultManager];
-      NSURL *libraryDir = [[fileManager URLsForDirectory:NSLibraryDirectory
-                                               inDomains:NSUserDomainMask] firstObject];
-      NSString *otaBundlePath = [[libraryDir path] stringByAppendingPathComponent:@"ota-main.jsbundle"];
-      
-    
-      
-      // Trigger React Native reload listeners (reload the JS bundle)
+      // Reload re-queries the delegate's bundleURL, which returns the OTA bundle if present
       RCTTriggerReloadCommandListeners(@"Reload triggered");
       resolve(@"Reload triggered");
     } @catch (NSException *exception) {
@@ -36,158 +156,156 @@ RCT_EXPORT_MODULE()
   });
 }
 
-- (std::shared_ptr<facebook::react::TurboModule>)getTurboModule:
-(const facebook::react::ObjCTurboModule::InitParams &)params
-{
-  return std::make_shared<facebook::react::NativeOtaSpecJSI>(params);
-}
-
 - (void)downloadBundle:(nonnull NSString *)url
            versionCode:(double)versionCode
+                sha256:(nullable NSString *)sha256
                resolve:(nonnull RCTPromiseResolveBlock)resolve
                 reject:(nonnull RCTPromiseRejectBlock)reject
 {
-    // Copy block để tránh bị giải phóng
-    RCTPromiseResolveBlock resolveCopy = [resolve copy];
-    RCTPromiseRejectBlock rejectCopy = [reject copy];
-    
-    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
-    NSString *bundleVersionKey = @"ota_bundle_version";
+  NSURL *bundleURL = [NSURL URLWithString:url];
+  if (!bundleURL) {
+    reject(@"INVALID_URL", @"Invalid URL", nil);
+    return;
+  }
 
-   
-    
-    NSURL *bundleURL = [NSURL URLWithString:url];
-    if (!bundleURL) {
-        if (rejectCopy) {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                rejectCopy(@"INVALID_URL", @"Invalid URL", nil);
-            });
-        }
-        return;
+  @synchronized(self) {
+    if (_downloading) {
+      reject(@"ALREADY_DOWNLOADING", @"Another download is in progress", nil);
+      return;
     }
-    
-    NSURLSessionDownloadTask *downloadTask = [[NSURLSession sharedSession]
-        downloadTaskWithURL:bundleURL
-          completionHandler:^(NSURL *location, NSURLResponse *response, NSError *error) {
-              
-        if (error) {
-            if (rejectCopy) {
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    rejectCopy(@"DOWNLOAD_FAILED", error.localizedDescription, error);
-                });
-            }
-            return;
-        }
-        
-        if (!location) {
-            if (rejectCopy) {
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    rejectCopy(@"NO_FILE", @"Downloaded file not found", nil);
-                });
-            }
-            return;
-        }
-        
-        NSFileManager *fileManager = [NSFileManager defaultManager];
-        NSURL *libraryDir = [[fileManager URLsForDirectory:NSLibraryDirectory inDomains:NSUserDomainMask] firstObject];
-        NSString *bundlePath = [[libraryDir path] stringByAppendingPathComponent:@"ota-main.jsbundle"];
-        NSString *tempZipPath = [location path];
-        NSString *unzipDir = [libraryDir path];
-        
-        NSError *unzipError = nil;
-        BOOL result = [SSZipArchive unzipFileAtPath:tempZipPath
-                                      toDestination:unzipDir
-                                          overwrite:YES
-                                           password:nil
-                                              error:&unzipError];
-      if (!result) {
-          NSString *errorMessage = unzipError ? unzipError.localizedDescription : @"Unknown unzip error";
-          if (rejectCopy) {
-              dispatch_async(dispatch_get_main_queue(), ^{
-                  rejectCopy(@"UNZIP_FAILED", errorMessage, unzipError);
-              });
-          }
-          return;
+    _downloading = YES;
+  }
+
+  __weak Ota *weakSelf = self;
+  void (^finish)(void) = ^{
+    Ota *strongSelf = weakSelf;
+    if (strongSelf) {
+      @synchronized(strongSelf) {
+        strongSelf->_downloading = NO;
       }
-        
-        NSString *unzippedBundle = [unzipDir stringByAppendingPathComponent:@"main.jsbundle"];
-        if (![fileManager fileExistsAtPath:unzippedBundle]) {
-            if (rejectCopy) {
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    rejectCopy(@"NO_BUNDLE", @"main.jsbundle not found in zip", nil);
-                });
-            }
-            return;
-        }
-        
-        // Remove old bundle if exists
-        if ([fileManager fileExistsAtPath:bundlePath]) {
-            [fileManager removeItemAtPath:bundlePath error:nil];
-        }
-        
-        NSError *moveError = nil;
-        if (![fileManager moveItemAtPath:unzippedBundle toPath:bundlePath error:&moveError]) {
-            if (rejectCopy) {
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    rejectCopy(@"MOVE_FAILED", moveError.localizedDescription, moveError);
-                });
-            }
-            return;
-        }
-        
-        // Remove temp zip
-        [fileManager removeItemAtPath:tempZipPath error:nil];
-        
-        [defaults setInteger:(NSInteger)versionCode forKey:bundleVersionKey];
-        [defaults synchronize];
-        
-        if (resolveCopy) {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                resolveCopy(@{@"status": @YES, @"message": @"Download and unzip successfully"});
-            });
-        }
-        
-    }];
-    
-    [downloadTask resume];
+    }
+  };
+  void (^emit)(NSDictionary *) = ^(NSDictionary *event) {
+    [weakSelf emitOnProgress:event];
+  };
+  OtaProgressThrottle *downloadProgress = [[OtaProgressThrottle alloc] initWithPhase:@"download" emitter:emit];
+
+  OtaDownloadDelegate *delegate = [OtaDownloadDelegate new];
+  delegate.onProgress = ^(int64_t received, int64_t total) {
+    [downloadProgress update:received total:total];
+  };
+  delegate.onComplete = ^(NSURL *location, NSURLResponse *response, NSError *error) {
+    NSFileManager *fileManager = [NSFileManager defaultManager];
+    NSURL *stagingDir = [OtaHelper stagingURL];
+    [fileManager removeItemAtURL:stagingDir error:nil];
+
+    void (^fail)(NSString *, NSString *, NSError *) = ^(NSString *code, NSString *message, NSError *err) {
+      [fileManager removeItemAtURL:stagingDir error:nil];
+      finish();
+      reject(code, message, err);
+    };
+
+    if (error) {
+      fail(@"DOWNLOAD_FAILED", error.localizedDescription, error);
+      return;
+    }
+
+    NSInteger statusCode = [response isKindOfClass:[NSHTTPURLResponse class]]
+      ? ((NSHTTPURLResponse *)response).statusCode : 200;
+    if (statusCode < 200 || statusCode >= 300) {
+      fail(@"HTTP_ERROR", [NSString stringWithFormat:@"Code: %ld", (long)statusCode], nil);
+      return;
+    }
+
+    if (!location) {
+      fail(@"NO_FILE", @"Downloaded file not found", nil);
+      return;
+    }
+
+    int64_t zipSize = [[fileManager attributesOfItemAtPath:location.path error:nil] fileSize];
+    [downloadProgress finish:zipSize total:response.expectedContentLength];
+
+    if (sha256.length > 0) {
+      NSString *actual = OtaSha256(location);
+      if (![actual isEqualToString:sha256.lowercaseString]) {
+        fail(@"CHECKSUM_MISMATCH",
+             [NSString stringWithFormat:@"Expected sha256 %@, got %@", sha256, actual ?: @"(unreadable)"], nil);
+        return;
+      }
+    }
+
+    // Extract into staging first so a broken zip never replaces a working bundle.
+    // `location` is only valid inside this callback, so unzip synchronously here.
+    OtaProgressThrottle *unzipProgress = [[OtaProgressThrottle alloc] initWithPhase:@"unzip" emitter:emit];
+    __block long entryCount = 0;
+    NSError *unzipError = nil;
+    BOOL unzipped = [SSZipArchive unzipFileAtPath:location.path
+                                    toDestination:stagingDir.path
+                               preserveAttributes:YES
+                                        overwrite:YES
+                                   nestedZipLevel:0
+                                         password:nil
+                                            error:&unzipError
+                                         delegate:nil
+                                  progressHandler:^(NSString *entry, unz_file_info zipInfo, long entryNumber, long total) {
+      entryCount = total;
+      [unzipProgress update:entryNumber total:total];
+    }
+                                completionHandler:nil];
+    if (!unzipped) {
+      fail(@"UNZIP_FAILED", unzipError.localizedDescription ?: @"Unknown unzip error", unzipError);
+      return;
+    }
+    [unzipProgress finish:entryCount total:entryCount];
+
+    if (![fileManager fileExistsAtPath:[stagingDir URLByAppendingPathComponent:kBundleName].path]) {
+      fail(@"NO_BUNDLE", @"main.jsbundle not found in zip", nil);
+      return;
+    }
+
+    NSError *installError = nil;
+    if (![OtaHelper installFromStaging:stagingDir version:(NSInteger)versionCode error:&installError]) {
+      fail(@"MOVE_FAILED", installError.localizedDescription, installError);
+      return;
+    }
+
+    finish();
+    resolve(@{@"status": @YES, @"message": @"Download and unzip successfully"});
+  };
+
+  // The session keeps a strong reference to its delegate until invalidated
+  NSURLSession *session = [NSURLSession sessionWithConfiguration:[NSURLSessionConfiguration defaultSessionConfiguration]
+                                                        delegate:delegate
+                                                   delegateQueue:nil];
+  [[session downloadTaskWithURL:bundleURL] resume];
+  [session finishTasksAndInvalidate];
 }
 
-- (nonnull NSString *)getSavedVersion { 
-  NSString *bundleVersionKey = @"ota_bundle_version";
-  NSInteger savedVersion = [[NSUserDefaults standardUserDefaults] integerForKey:bundleVersionKey];
-  return [NSString stringWithFormat:@"%ld", (long)savedVersion];
+- (nonnull NSNumber *)getSavedVersion
+{
+  return @([OtaHelper savedVersion]);
 }
 
-- (void)removeBundle:(nonnull RCTPromiseResolveBlock)resolve reject:(nonnull RCTPromiseRejectBlock)reject { 
-  RCTPromiseResolveBlock resolveCopy = [resolve copy];
-      RCTPromiseRejectBlock rejectCopy = [reject copy];
-
-      dispatch_async(dispatch_get_main_queue(), ^{
-          NSFileManager *fileManager = [NSFileManager defaultManager];
-          NSURL *libraryDir = [[fileManager URLsForDirectory:NSLibraryDirectory
-                                                   inDomains:NSUserDomainMask] firstObject];
-          NSString *bundlePath = [[libraryDir path] stringByAppendingPathComponent:@"ota-main.jsbundle"];
-          
-          NSError *error = nil;
-          if ([fileManager fileExistsAtPath:bundlePath]) {
-              if (![fileManager removeItemAtPath:bundlePath error:&error]) {
-                  if (rejectCopy) {
-                      rejectCopy(@"REMOVE_FAILED", error.localizedDescription, error);
-                  }
-                  return;
-              }
-          }
-
-          // Reset saved version
-          NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
-          [defaults removeObjectForKey:@"ota_bundle_version"];
-          [defaults synchronize];
-
-          if (resolveCopy) {
-              resolveCopy(@{@"status": @YES, @"message": @"OTA bundle removed successfully"});
-          }
-      });
+- (nonnull NSNumber *)getFailedVersion
+{
+  return @([OtaHelper failedVersion]);
 }
 
+- (nonnull NSString *)getNativeVersion
+{
+  return [OtaHelper nativeVersion];
+}
+
+- (void)notifyAppReady
+{
+  [OtaHelper notifyAppReady];
+}
+
+- (void)removeBundle:(nonnull RCTPromiseResolveBlock)resolve
+              reject:(nonnull RCTPromiseRejectBlock)reject
+{
+  [OtaHelper clear];
+  resolve(@{@"status": @YES, @"message": @"OTA bundle removed successfully"});
+}
 
 @end

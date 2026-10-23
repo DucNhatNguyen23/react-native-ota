@@ -2,7 +2,7 @@
   "compilerOptions": {
     "rootDir": ".",
     "paths": {
-      "react-native-ota": ["./src/index"]
+      "react-native-bundle-ota": ["./src/index"]
     },
     "allowUnreachableCode": false,
     "allowUnusedLabels": false,

@@ -1,69 +1,44 @@
 import { useEffect, useState } from 'react';
-import { Button, Platform, StyleSheet, Text, View } from 'react-native';
+import { Button, StyleSheet, Text, View } from 'react-native';
 import {
-  downloadBundle,
+  checkForUpdate,
+  getFailedVersion,
+  getNativeVersion,
   getSavedVersion,
   reloadApp,
   removeBundle,
-} from 'react-native-ota';
-type responseVersionCode = {
-  versionCode: number;
-};
+} from 'react-native-bundle-ota';
+
 const URL = 'http://10.0.2.2:3000';
+
 export default function App() {
-  const [status] = useState<string>('');
+  const [status, setStatus] = useState<string>('');
 
-  const handleReset = async () => {
-    try {
-      const result = await reloadApp();
-      console.log(result);
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
-  const handleDownload = async () => {
-    try {
-      // get version code from server
-      // type server response is { versionCode: number }
-
-      const response = await fetch(`${URL}/ota/version`);
-      const getVersion: responseVersionCode = await response.json();
-
-      //get saved version code in app
-      const savedVersion = getSavedVersion();
-
-      if (savedVersion === getVersion.versionCode) {
-        // Already the latest version
-        return;
-      }
-
-      // url response bundle from server (main.jsbundle.zip for ios, index.android.bundle.zip for android)
-      const url = Platform.select({
-        android: `${URL}/ota/android-bundle`,
-        ios: `${URL}/ota/ios-bundle`,
-      });
-
-      // download bundle
-      const result = await downloadBundle(url, getVersion.versionCode);
-
-      //if download success, reload app and apply new bundle
-      if (result.status) {
-        reloadApp();
-      }
-    } catch (e) {
-      console.error(e);
-    }
-  };
   useEffect(() => {
-    handleDownload();
+    // Also confirms the running bundle works (notifyAppReady), so call it on startup
+    checkForUpdate(`${URL}/ota/check`, {
+      onProgress: ({ phase, progress }) => {
+        setStatus(progress < 0 ? `${phase}...` : `${phase} ${progress}%`);
+      },
+    })
+      .then((result) => {
+        if (result.status === 'downloaded') {
+          setStatus(`version ${result.update.version} ready on next launch`);
+        } else {
+          setStatus(result.status);
+        }
+      })
+      .catch((e) => setStatus(`error: ${e.message}`));
   }, []);
+
   return (
     <View style={styles.container}>
       <Text>Hello we have a update version!!!!!</Text>
       <Text>status: {status}</Text>
-      <Text>version saved code: {getSavedVersion()}</Text>
-      <Button title="Reload" onPress={handleReset} />
+      <Text>native version: {getNativeVersion()}</Text>
+      <Text>bundle version: {getSavedVersion()}</Text>
+      <Text>rolled back version: {getFailedVersion()}</Text>
+      <Button title="Reload" onPress={reloadApp} />
       <Button title="Remove bundle" onPress={removeBundle} />
     </View>
   );
