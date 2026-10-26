@@ -54,7 +54,7 @@ object OtaHelper {
 
     if (prefs.getBoolean(KEY_PENDING, false)) {
       if (prefs.getBoolean(KEY_PENDING_LAUNCHED, false)) {
-        Log.w(TAG, "OTA bundle ${prefs.getLong(KEY_VERSION, 0)} did not call notifyAppReady, rolling back")
+        Log.w(TAG, "OTA bundle ${prefs.getVersion(KEY_VERSION)} did not call notifyAppReady, rolling back")
         rollback(prefs)
       } else {
         // commit() so the flag survives a crash right after this
@@ -83,7 +83,7 @@ object OtaHelper {
   internal fun stagingDir(context: Context): File = File(rootDir(context), STAGING_DIR)
 
   @Synchronized
-  internal fun install(context: Context, staging: File, version: Long) {
+  internal fun install(context: Context, staging: File, version: Double) {
     val name = "${version}_${System.currentTimeMillis()}"
     if (!staging.renameTo(File(rootDir(context), name))) {
       throw IOException("Failed to move OTA bundle into place")
@@ -95,10 +95,10 @@ object OtaHelper {
       // The current bundle is confirmed (or embedded), it becomes the rollback target.
       // Otherwise it was never confirmed, so keep the last known good one.
       editor.putString(KEY_PREVIOUS_DIR, prefs.getString(KEY_DIR, null))
-        .putLong(KEY_PREVIOUS_VERSION, prefs.getLong(KEY_VERSION, 0))
+        .putVersion(KEY_PREVIOUS_VERSION, prefs.getVersion(KEY_VERSION))
     }
     editor.putString(KEY_DIR, name)
-      .putLong(KEY_VERSION, version)
+      .putVersion(KEY_VERSION, version)
       .putBoolean(KEY_PENDING, true)
       .putBoolean(KEY_PENDING_LAUNCHED, false)
       .commit()
@@ -130,9 +130,9 @@ object OtaHelper {
     cleanup(context, prefs)
   }
 
-  internal fun savedVersion(context: Context): Long = prefs(context).getLong(KEY_VERSION, 0)
+  internal fun savedVersion(context: Context): Double = prefs(context).getVersion(KEY_VERSION)
 
-  internal fun failedVersion(context: Context): Long = prefs(context).getLong(KEY_FAILED_VERSION, 0)
+  internal fun failedVersion(context: Context): Double = prefs(context).getVersion(KEY_FAILED_VERSION)
 
   // versionName alone is not enough: a store build can bump only versionCode
   internal fun getNativeVersion(context: Context): String {
@@ -148,9 +148,9 @@ object OtaHelper {
 
   private fun rollback(prefs: SharedPreferences) {
     prefs.edit()
-      .putLong(KEY_FAILED_VERSION, prefs.getLong(KEY_VERSION, 0))
+      .putVersion(KEY_FAILED_VERSION, prefs.getVersion(KEY_VERSION))
       .putString(KEY_DIR, prefs.getString(KEY_PREVIOUS_DIR, null))
-      .putLong(KEY_VERSION, prefs.getLong(KEY_PREVIOUS_VERSION, 0))
+      .putVersion(KEY_VERSION, prefs.getVersion(KEY_PREVIOUS_VERSION))
       .remove(KEY_PREVIOUS_DIR)
       .remove(KEY_PREVIOUS_VERSION)
       .remove(KEY_PENDING)
@@ -175,6 +175,18 @@ object OtaHelper {
       if (it.name !in keep) it.deleteRecursively()
     }
   }
+
+  // Versions can be decimals (e.g. 12.1), so store them as strings. Values written by
+  // <= 2.0.0 are Longs, read them too.
+  private fun SharedPreferences.getVersion(key: String): Double =
+    when (val value = all[key]) {
+      is String -> value.toDoubleOrNull() ?: 0.0
+      is Long -> value.toDouble()
+      else -> 0.0
+    }
+
+  private fun SharedPreferences.Editor.putVersion(key: String, version: Double): SharedPreferences.Editor =
+    putString(key, version.toString())
 
   private fun rootDir(context: Context): File = File(context.filesDir, ROOT_DIR)
 

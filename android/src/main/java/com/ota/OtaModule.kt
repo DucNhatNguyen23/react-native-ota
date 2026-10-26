@@ -95,7 +95,7 @@ class OtaModule(reactContext: ReactApplicationContext) : NativeOtaSpec(reactCont
                         throw IOException("${OtaHelper.OTA_BUNDLE_NAME} not found in ZIP")
                     }
 
-                    OtaHelper.install(context, stagingDir, versionCode.toLong())
+                    OtaHelper.install(context, stagingDir, versionCode)
 
                     promise.resolve(result(true, "Download and unzip successfully"))
                 } catch (e: Exception) {
@@ -186,10 +186,10 @@ class OtaModule(reactContext: ReactApplicationContext) : NativeOtaSpec(reactCont
 
     // ------------------ versions ------------------
     override fun getSavedVersion(): Double =
-        OtaHelper.savedVersion(reactApplicationContext).toDouble()
+        OtaHelper.savedVersion(reactApplicationContext)
 
     override fun getFailedVersion(): Double =
-        OtaHelper.failedVersion(reactApplicationContext).toDouble()
+        OtaHelper.failedVersion(reactApplicationContext)
 
     override fun getNativeVersion(): String =
         OtaHelper.getNativeVersion(reactApplicationContext)

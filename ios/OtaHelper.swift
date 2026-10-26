@@ -54,7 +54,7 @@ public class OtaHelper: NSObject {
            checkedPendingDir != dir {
             checkedPendingDir = dir
             if defaults.bool(forKey: pendingLaunchedKey) {
-                print("[OtaHelper] OTA bundle \(defaults.integer(forKey: versionKey)) did not call notifyAppReady, rolling back")
+                print("[OtaHelper] OTA bundle \(defaults.double(forKey: versionKey)) did not call notifyAppReady, rolling back")
                 rollback()
             } else {
                 defaults.set(true, forKey: pendingLaunchedKey)
@@ -93,7 +93,7 @@ public class OtaHelper: NSObject {
         return root.appendingPathComponent(stagingDirName)
     }
 
-    @objc public static func install(fromStaging staging: URL, version: Int) throws {
+    @objc public static func install(fromStaging staging: URL, version: Double) throws {
         lock.lock()
         defer { lock.unlock() }
 
@@ -104,7 +104,7 @@ public class OtaHelper: NSObject {
             // The current bundle is confirmed (or embedded), it becomes the rollback target.
             // Otherwise it was never confirmed, so keep the last known good one.
             setOrRemove(defaults.string(forKey: dirKey), forKey: previousDirKey)
-            defaults.set(defaults.integer(forKey: versionKey), forKey: previousVersionKey)
+            defaults.set(defaults.double(forKey: versionKey), forKey: previousVersionKey)
         }
         defaults.set(name, forKey: dirKey)
         defaults.set(version, forKey: versionKey)
@@ -135,12 +135,13 @@ public class OtaHelper: NSObject {
         cleanup()
     }
 
-    @objc public static func savedVersion() -> Int {
-        defaults.integer(forKey: versionKey)
+    // Doubles: versions can be decimals (e.g. 12.1). double(forKey:) also reads integers saved by <= 2.0.0
+    @objc public static func savedVersion() -> Double {
+        defaults.double(forKey: versionKey)
     }
 
-    @objc public static func failedVersion() -> Int {
-        defaults.integer(forKey: failedVersionKey)
+    @objc public static func failedVersion() -> Double {
+        defaults.double(forKey: failedVersionKey)
     }
 
     // Include the build number: a store update can bump only CFBundleVersion
@@ -152,9 +153,9 @@ public class OtaHelper: NSObject {
     }
 
     private static func rollback() {
-        defaults.set(defaults.integer(forKey: versionKey), forKey: failedVersionKey)
+        defaults.set(defaults.double(forKey: versionKey), forKey: failedVersionKey)
         setOrRemove(defaults.string(forKey: previousDirKey), forKey: dirKey)
-        defaults.set(defaults.integer(forKey: previousVersionKey), forKey: versionKey)
+        defaults.set(defaults.double(forKey: previousVersionKey), forKey: versionKey)
         [previousDirKey, previousVersionKey, pendingKey, pendingLaunchedKey]
             .forEach { defaults.removeObject(forKey: $0) }
     }

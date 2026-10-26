@@ -264,7 +264,7 @@ RCT_EXPORT_MODULE()
     }
 
     NSError *installError = nil;
-    if (![OtaHelper installFromStaging:stagingDir version:(NSInteger)versionCode error:&installError]) {
+    if (![OtaHelper installFromStaging:stagingDir version:versionCode error:&installError]) {
       fail(@"MOVE_FAILED", installError.localizedDescription, installError);
       return;
     }

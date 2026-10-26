@@ -1,6 +1,6 @@
 {
   "name": "react-native-bundle-ota",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "here is a simple libary for ota react native update",
   "main": "./lib/module/index.js",
   "types": "./lib/typescript/src/index.d.ts",
@@ -92,7 +92,7 @@
   },
   "peerDependencies": {
     "react": "*",
-    "react-native": "*"
+    "react-native": ">=0.80.0"
   },
   "workspaces": [
     "example"

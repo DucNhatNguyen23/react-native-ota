@@ -70,6 +70,16 @@ it('treats the installed version as up to date', async () => {
   expect(mockOta.downloadBundle).not.toHaveBeenCalled();
 });
 
+it('treats a decimal version as up to date once installed', async () => {
+  mockOta.getSavedVersion.mockReturnValue(12.1);
+  mockServer({ update: { ...update, version: 12.1 } });
+
+  await expect(checkForUpdate('https://api/check')).resolves.toEqual({
+    status: 'up-to-date',
+  });
+  expect(mockOta.downloadBundle).not.toHaveBeenCalled();
+});
+
 it('skips a version that was rolled back', async () => {
   mockOta.getFailedVersion.mockReturnValue(6);
   mockServer({ update });

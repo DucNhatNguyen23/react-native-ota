@@ -22,11 +22,17 @@ A lightweight React Native TurboModule library for Over-The-Air (OTA) updates, a
 
 - **One call** to check, download and install updates: `checkForUpdate()`.
 - **Server-driven**: the app sends its native version, the server decides which bundle (if any) is compatible.
-- **Applied on next launch** by default, no interruption for the user. Mandatory updates reload immediately.
-- **Automatic rollback**: a bundle that crashes before `notifyAppReady()` is replaced by the previous one and never downloaded again.
+- **Applied on next launch** (cold start) by default, no interruption for the user. Mandatory updates reload immediately.
+- **Automatic rollback**: a bundle that crashes before `notifyAppReady()` is replaced by the previous one, and that version is skipped afterwards.
 - **Integrity check** with SHA-256, **download/unzip progress** events.
 - **Assets support** (images, fonts, ...) shipped inside the bundle zip.
 - **Automatic cleanup** of OTA bundles when the app is updated via App Store or Google Play.
+
+## 📋 Requirements
+
+- React Native **0.80+** with the **New Architecture** (the module is a TurboModule and uses `CodegenTypes.EventEmitter`). Tested on 0.81.
+- iOS: an `AppDelegate` using `RCTReactNativeFactory` / `RCTDefaultReactNativeFactoryDelegate` (default template since 0.79).
+- Android: a `MainApplication` using `DefaultReactNativeHost` (default template).
 
 ## 🚀 Installation
 
@@ -37,16 +43,18 @@ yarn add react-native-bundle-ota
 # or
 npm install react-native-bundle-ota
 ```
-IOS
-```
+
+iOS:
+
+```bash
 cd ios && pod install
 ```
 
 ## 🛠️ Config
 
-IOS: in Appdelegate.swift
+**iOS**: in `AppDelegate.swift`
 
-```Appdelegate.swift
+```swift
 import Ota
 ...
 
@@ -64,20 +72,22 @@ class ReactNativeDelegate: RCTDefaultReactNativeFactoryDelegate {
   }
 }
 ```
-Android: In MainApplication.kt 
+**Android**: in `MainApplication.kt`, inside your `DefaultReactNativeHost`
 
-```MainApplication.kt
-//import this
-import java.io.File
+```kotlin
 import com.ota.OtaHelper
+import java.io.File
 ...
-... 
 
-//config
- override fun getJSBundleFile(): String? {
-        val otaFile: File? = OtaHelper.getBundleFile(applicationContext)
-        return otaFile?.absolutePath ?: super.getJSBundleFile()
-      }
+override val reactNativeHost: ReactNativeHost =
+  object : DefaultReactNativeHost(this) {
+    // ...
+
+    override fun getJSBundleFile(): String? {
+      val otaFile: File? = OtaHelper.getBundleFile(applicationContext)
+      return otaFile?.absolutePath ?: super.getJSBundleFile()
+    }
+  }
 ```
 
 
@@ -85,13 +95,11 @@ import com.ota.OtaHelper
 
 Add 2 scripts for build bundle file .zip in package.json
 
-```package.json
- "scripts": {
-   ...
-
+```json
+"scripts": {
     "bundle:ios": "rm -rf ota/ios && mkdir -p ota/ios && react-native bundle --entry-file index.js --platform ios --dev false --minify true --bundle-output ota/ios/main.jsbundle --assets-dest ota/ios && cd ota/ios && zip -qr ../main.jsbundle.zip . && shasum -a 256 ../main.jsbundle.zip",
     "bundle:android": "rm -rf ota/android && mkdir -p ota/android && react-native bundle --entry-file index.js --platform android --dev false --minify true --bundle-output ota/android/index.android.bundle --assets-dest ota/android && cd ota/android && zip -qr ../index.android.bundle.zip . && shasum -a 256 ../index.android.bundle.zip"
-  }
+}
 ```
 
 Output: `ota/main.jsbundle.zip` (iOS) and `ota/index.android.bundle.zip` (Android), plus their SHA-256 printed at the end. Upload the zip to your server together with its SHA-256, and add `ota/` to `.gitignore`. The scripts need macOS/Linux (`rm`, `zip`, `shasum`).
@@ -139,7 +147,7 @@ Respond with `{ "update": null }` when there is nothing to install, otherwise:
 
 | Field | Required | Meaning |
 |---|---|---|
-| `version` | ✅ | Integer, unique per bundle. Must differ from `bundleVersion` to trigger a download |
+| `version` | ✅ | Number, unique per bundle (`6`, `12.1`, ...). Compared by equality, not by order: any value different from `bundleVersion` triggers a download. Decimal versions need 2.0.1+ (2.0.0 stores them truncated, `12.1` → `12`, and downloads again on every launch) |
 | `url` | ✅ | Zip built with the scripts above, for this platform |
 | `sha256` | recommended | Hash of the zip. The download is rejected if it does not match |
 | `mandatory` | | `true` reloads the app right after download. Default: applied on next launch |
@@ -166,6 +174,12 @@ app.get('/ota/check', (req, res) => {
 ```
 
 Use HTTPS in production: release builds block plain HTTP (Android cleartext policy, iOS App Transport Security).
+
+**Fresh installs**: right after installing (or updating) the app from the store, `bundleVersion` is `0` and the app runs the JS embedded in the binary. With a non-mandatory update, that whole first session runs the old JS. To apply the OTA immediately on first launch, mark it mandatory for that case:
+
+```js
+res.json({ update: { ...release, mandatory: release.mandatory || Number(bundleVersion) === 0 } });
+```
 
 ## 📖 Usage
 
@@ -234,12 +248,13 @@ Call `checkForUpdate()` (or `notifyAppReady()`) early: if the user closes the ap
 ## ⚠️ Important Notes
 
 - **OTA vs. Store Updates**: OTA updates are for JavaScript bundle changes only. Native code changes still require official App Store or Google Play updates.
+- **"Update from the store" prompts**: if your app asks users to update from the store, compare the **native** version (`getNativeVersion()` or `react-native-device-info`) with the latest version **published on the store**. Never compare with the OTA version, and never bump the store-prompt version when you only ship an OTA: a fresh install runs the embedded JS until the OTA is applied, so it would be told to update while the store has nothing newer.
 - **Version Conflict Handling**:
   - When the app is updated via App Store or Google Play, the library compares the native version (iOS `CFBundleShortVersionString` + `CFBundleVersion`, Android `versionName` + `versionCode`) with the one stored at the last launch.
   - If it differs, the old OTA bundle is automatically removed and `getSavedVersion()` is reset to `0`.
 - **Reload**: on Android `reloadApp()` restarts the app process (the bundle path is only read when React Native starts). On iOS it reloads the JS in place.
 - **Storage**: each install lives in its own folder (`filesDir/ota/` on Android, `Library/ota/` on iOS, excluded from iCloud backup). At most the current and previous bundles are kept.
-- **Hermes**: the OTA bundle is plain JS. Hermes can run it, but startup is slower than bytecode. To ship bytecode, compile the bundle with `hermesc -emit-binary -O` (from `node_modules/react-native/sdks/hermesc`) before zipping.
+- **Hermes**: the OTA bundle is plain JS. Hermes can run it, but startup is slower than bytecode. To ship bytecode, compile the bundle with `node_modules/react-native/sdks/hermesc/<osx|linux64|win64>-bin/hermesc -emit-binary -O` before zipping, using the same React Native version as the installed binary (bytecode only runs on the Hermes version that produced it).
 - **Best Practices**: Always test OTA updates thoroughly to ensure compatibility with your app’s native codebase.
 
 ## 📹 Demo
