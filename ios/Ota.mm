@@ -41,10 +41,17 @@ typedef void (^OtaDownloadCompletion)(NSURL *_Nullable location, NSURLResponse *
 @interface OtaDownloadDelegate : NSObject <NSURLSessionDownloadDelegate>
 @property (nonatomic, copy) OtaProgressBlock onProgress;
 @property (nonatomic, copy) OtaDownloadCompletion onComplete;
+// Asked once, as soon as the total size is known: NO cancels the download with OtaErrorInsufficientSpace
+@property (nonatomic, copy) BOOL (^hasSpaceFor)(int64_t total);
 @end
+
+static NSString *const OtaErrorDomain = @"Ota";
+static const NSInteger OtaErrorInsufficientSpace = 507;
 
 @implementation OtaDownloadDelegate {
   BOOL _finished;
+  BOOL _spaceChecked;
+  BOOL _noSpace;
 }
 
 - (void)URLSession:(NSURLSession *)session
@@ -53,6 +60,14 @@ typedef void (^OtaDownloadCompletion)(NSURL *_Nullable location, NSURLResponse *
  totalBytesWritten:(int64_t)totalBytesWritten
 totalBytesExpectedToWrite:(int64_t)totalBytesExpectedToWrite
 {
+  if (!_spaceChecked && totalBytesExpectedToWrite > 0) {
+    _spaceChecked = YES;
+    if (self.hasSpaceFor && !self.hasSpaceFor(totalBytesExpectedToWrite)) {
+      _noSpace = YES;
+      [downloadTask cancel];
+      return;
+    }
+  }
   self.onProgress(totalBytesWritten, totalBytesExpectedToWrite);
 }
 
@@ -71,6 +86,11 @@ didCompleteWithError:(NSError *)error
 {
   if (!_finished) {
     _finished = YES;
+    if (_noSpace) {
+      error = [NSError errorWithDomain:OtaErrorDomain
+                                  code:OtaErrorInsufficientSpace
+                              userInfo:@{NSLocalizedDescriptionKey: @"Not enough free space for the OTA bundle"}];
+    }
     self.onComplete(nil, task.response, error);
   }
 }
@@ -190,9 +210,25 @@ RCT_EXPORT_MODULE()
   };
   OtaProgressThrottle *downloadProgress = [[OtaProgressThrottle alloc] initWithPhase:@"download" emitter:emit];
 
+  // Resume an interrupted download of the same version (weak network: 80 MB rarely finishes in one go).
+  // Resume data of other versions is stale, drop it. Read once then delete: a broken one must not loop.
+  [OtaHelper stagingURL]; // creates the ota root folder
+  NSURL *resumeURL = [OtaHelper resumeDataURLWithVersion:versionCode];
+  [OtaHelper clearResumeDataExcept:@(versionCode)];
+  NSData *resumeData = [NSData dataWithContentsOfURL:resumeURL];
+  [[NSFileManager defaultManager] removeItemAtURL:resumeURL error:nil];
+
   OtaDownloadDelegate *delegate = [OtaDownloadDelegate new];
   delegate.onProgress = ^(int64_t received, int64_t total) {
     [downloadProgress update:received total:total];
+  };
+  // zip + extracted copy + previous bundle kept for rollback, plus a margin
+  delegate.hasSpaceFor = ^BOOL(int64_t total) {
+    NSNumber *free = nil;
+    [[NSURL fileURLWithPath:NSHomeDirectory()] getResourceValue:&free
+                                                         forKey:NSURLVolumeAvailableCapacityForImportantUsageKey
+                                                          error:nil];
+    return free == nil || free.longLongValue >= total * 3 + 50LL * 1024 * 1024;
   };
   delegate.onComplete = ^(NSURL *location, NSURLResponse *response, NSError *error) {
     NSFileManager *fileManager = [NSFileManager defaultManager];
@@ -206,6 +242,15 @@ RCT_EXPORT_MODULE()
     };
 
     if (error) {
+      if ([error.domain isEqualToString:OtaErrorDomain] && error.code == OtaErrorInsufficientSpace) {
+        fail(@"INSUFFICIENT_SPACE", error.localizedDescription, error);
+        return;
+      }
+      // Keep what was received so the next attempt continues from there
+      NSData *partial = error.userInfo[NSURLSessionDownloadTaskResumeData];
+      if (partial) {
+        [partial writeToURL:resumeURL atomically:YES];
+      }
       fail(@"DOWNLOAD_FAILED", error.localizedDescription, error);
       return;
     }
@@ -277,7 +322,10 @@ RCT_EXPORT_MODULE()
   NSURLSession *session = [NSURLSession sessionWithConfiguration:[NSURLSessionConfiguration defaultSessionConfiguration]
                                                         delegate:delegate
                                                    delegateQueue:nil];
-  [[session downloadTaskWithURL:bundleURL] resume];
+  NSURLSessionDownloadTask *task = resumeData
+    ? [session downloadTaskWithResumeData:resumeData]
+    : [session downloadTaskWithURL:bundleURL];
+  [task resume];
   [session finishTasksAndInvalidate];
 }
 

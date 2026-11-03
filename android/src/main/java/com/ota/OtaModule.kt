@@ -30,9 +30,21 @@ class OtaModule(reactContext: ReactApplicationContext) : NativeOtaSpec(reactCont
     override fun getName(): String = NAME
 
     // ------------------ downloadBundle ------------------
+    // The zip goes to filesDir (cacheDir can be wiped by the OS mid-download -> FileNotFoundException on unzip)
+    // and is kept per version when the connection drops, so the next attempt resumes with an HTTP Range request.
     override fun downloadBundle(url: String, versionCode: Double, sha256: String?, promise: Promise) {
+        val context = reactApplicationContext
+        val partFile = File(context.filesDir, "$PART_PREFIX$versionCode$PART_SUFFIX")
+        // Partial downloads of other versions are stale
+        context.filesDir.listFiles()?.forEach {
+            if (it.name.startsWith(PART_PREFIX) && it.name != partFile.name) it.delete()
+        }
+        val resumeFrom = if (partFile.isFile) partFile.length() else 0L
+
         val request = try {
-            Request.Builder().url(url).build()
+            Request.Builder().url(url).apply {
+                if (resumeFrom > 0) header("Range", "bytes=$resumeFrom-")
+            }.build()
         } catch (e: IllegalArgumentException) {
             promise.reject("INVALID_URL", e)
             return
@@ -50,26 +62,43 @@ class OtaModule(reactContext: ReactApplicationContext) : NativeOtaSpec(reactCont
             }
 
             override fun onResponse(call: Call, response: Response) {
-                val context = reactApplicationContext
-                val tempZip = File(context.cacheDir, "ota_download.zip")
                 val stagingDir = OtaHelper.stagingDir(context)
+                // Keep the partial file only when the transfer itself was interrupted
+                var keepPart = false
                 try {
-                    val digest = MessageDigest.getInstance("SHA-256")
                     response.use {
+                        if (it.code == 416) {
+                            // Partial file no longer matches the remote one: start over next time
+                            promise.reject("HTTP_ERROR", "Code: 416")
+                            return
+                        }
                         if (!it.isSuccessful) {
+                            keepPart = true
                             promise.reject("HTTP_ERROR", "Code: ${it.code}")
                             return
                         }
                         val body = it.body ?: throw IOException("Empty response body")
-                        val progress = ProgressEmitter("download", body.contentLength())
+                        // 206 = server continues where we stopped; 200 = full file, overwrite
+                        val append = it.code == 206 && resumeFrom > 0
+                        val already = if (append) resumeFrom else 0L
+                        val total = if (body.contentLength() > 0) already + body.contentLength() else -1L
+
+                        // zip + extracted copy + previous bundle kept for rollback, plus a margin
+                        if (total > 0 && context.filesDir.usableSpace < total * 3 + FREE_SPACE_MARGIN) {
+                            keepPart = true
+                            promise.reject("INSUFFICIENT_SPACE", "Not enough free space for the OTA bundle")
+                            return
+                        }
+
+                        val progress = ProgressEmitter("download", total)
+                        keepPart = true
                         body.byteStream().use { input ->
-                            FileOutputStream(tempZip).use { output ->
+                            FileOutputStream(partFile, append).use { output ->
                                 val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                                var received = 0L
+                                var received = already
                                 var read = input.read(buffer)
                                 while (read >= 0) {
                                     output.write(buffer, 0, read)
-                                    digest.update(buffer, 0, read)
                                     received += read
                                     progress.update(received)
                                     read = input.read(buffer)
@@ -77,10 +106,11 @@ class OtaModule(reactContext: ReactApplicationContext) : NativeOtaSpec(reactCont
                                 progress.finish(received)
                             }
                         }
+                        keepPart = false
                     }
 
                     if (!sha256.isNullOrEmpty()) {
-                        val actual = digest.digest().joinToString("") { "%02x".format(it) }
+                        val actual = sha256Of(partFile)
                         if (!actual.equals(sha256, ignoreCase = true)) {
                             promise.reject("CHECKSUM_MISMATCH", "Expected sha256 $sha256, got $actual")
                             return
@@ -89,7 +119,7 @@ class OtaModule(reactContext: ReactApplicationContext) : NativeOtaSpec(reactCont
 
                     // Extract into staging first so a broken zip never replaces a working bundle
                     stagingDir.deleteRecursively()
-                    unzip(tempZip, stagingDir)
+                    unzip(partFile, stagingDir)
 
                     if (!File(stagingDir, OtaHelper.OTA_BUNDLE_NAME).isFile) {
                         throw IOException("${OtaHelper.OTA_BUNDLE_NAME} not found in ZIP")
@@ -99,14 +129,27 @@ class OtaModule(reactContext: ReactApplicationContext) : NativeOtaSpec(reactCont
 
                     promise.resolve(result(true, "Download and unzip successfully"))
                 } catch (e: Exception) {
-                    promise.reject("PROCESS_FAILED", e)
+                    promise.reject(if (keepPart) "DOWNLOAD_FAILED" else "PROCESS_FAILED", e)
                 } finally {
                     stagingDir.deleteRecursively()
-                    tempZip.delete()
+                    if (!keepPart) partFile.delete()
                     downloading.set(false)
                 }
             }
         })
+    }
+
+    private fun sha256Of(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { input ->
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            var read = input.read(buffer)
+            while (read >= 0) {
+                digest.update(buffer, 0, read)
+                read = input.read(buffer)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
     // Extracts the whole archive (bundle + drawable-*/raw assets), guarding against zip slip
@@ -218,5 +261,8 @@ class OtaModule(reactContext: ReactApplicationContext) : NativeOtaSpec(reactCont
     companion object {
         const val NAME = "Ota"
         private const val PROGRESS_INTERVAL_MS = 100L
+        private const val PART_PREFIX = "ota_download_"
+        private const val PART_SUFFIX = ".part"
+        private const val FREE_SPACE_MARGIN = 50L * 1024 * 1024
     }
 }
