@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 /// Owns the OTA bundle state. Layout:
 ///   Library/ota/<version>_<timestamp>/main.jsbundle + assets/  (one folder per install)
@@ -10,6 +11,7 @@ import Foundation
 public class OtaHelper: NSObject {
     private static let bundleName = "main.jsbundle"
     private static let stagingDirName = "staging"
+    private static let resumePrefix = "resume_"
 
     private static let lastVersionKey = "last_version"
     private static let versionKey = "ota_bundle_version"
@@ -56,8 +58,13 @@ public class OtaHelper: NSObject {
             if defaults.bool(forKey: pendingLaunchedKey) {
                 print("[OtaHelper] OTA bundle \(defaults.double(forKey: versionKey)) did not call notifyAppReady, rolling back")
                 rollback()
-            } else {
+            } else if launchedInForeground() {
                 defaults.set(true, forKey: pendingLaunchedKey)
+            } else {
+                // Background launch (push, location, background fetch): the OS may kill the process before JS
+                // gets to notifyAppReady(). Only a foreground launch counts as a try, or a good bundle gets
+                // rolled back on the next launch.
+                print("[OtaHelper] Background launch, pending OTA bundle not counted as launched")
             }
         }
 
@@ -81,6 +88,27 @@ public class OtaHelper: NSObject {
         }
         print("[OtaHelper] Using main bundle in app")
         return Bundle.main.url(forResource: "main", withExtension: "jsbundle")
+    }
+
+    /// `.background` during didFinishLaunching means the OS started the app without UI.
+    /// Off the main thread the state cannot be read safely, so count it as a foreground launch.
+    private static func launchedInForeground() -> Bool {
+        guard Thread.isMainThread else { return true }
+        return UIApplication.shared.applicationState != .background
+    }
+
+    /// Resume data of an interrupted download, kept per bundle version (see Ota.mm).
+    @objc(resumeDataURLWithVersion:) public static func resumeDataURL(version: Double) -> URL {
+        rootURL.appendingPathComponent("\(resumePrefix)\(version).data")
+    }
+
+    /// Deletes resume data of every version except `keep` (nil = all).
+    @objc(clearResumeDataExcept:) public static func clearResumeData(except keep: NSNumber?) {
+        let items = (try? FileManager.default.contentsOfDirectory(atPath: rootURL.path)) ?? []
+        let keepName = keep.map { resumeDataURL(version: $0.doubleValue).lastPathComponent }
+        for item in items where item.hasPrefix(resumePrefix) && item != keepName {
+            try? FileManager.default.removeItem(at: rootURL.appendingPathComponent(item))
+        }
     }
 
     @objc public static func stagingURL() -> URL {
@@ -183,7 +211,7 @@ public class OtaHelper: NSObject {
             stagingDirName,
         ]
         let items = (try? FileManager.default.contentsOfDirectory(atPath: rootURL.path)) ?? []
-        for item in items where !keep.contains(item) {
+        for item in items where !keep.contains(item) && !item.hasPrefix(resumePrefix) {
             try? FileManager.default.removeItem(at: rootURL.appendingPathComponent(item))
         }
     }
